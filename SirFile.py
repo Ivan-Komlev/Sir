@@ -1,11 +1,14 @@
 """
  * SIR file format experiment
+ * Multi-dimensional array storage format
+ * Version 2 includes start index and compression
+ 
  * @author Ivan komlev <ivankomlev@gmail.com>
  * @link http://www.joomlaboat.com
+ * @github https://github.com/Ivan-Komlev/Sir
  * @copyright Copyright (C) 2020. All Rights Reserved
  * @license GNU/GPL Version 2 or later - http://www.gnu.org/licenses/gpl-2.0.html
- 
- * Multi-dimensional array storage format
+  
  * This is just an experiment yet
  * It can save Multi-dimensional arrays to file and read them
  * The data is save in bytes to be compact and have random access option
@@ -13,10 +16,9 @@
 
  * Data types:
  * https://docs.python.org/3/library/struct.html
- 
- 
+
  THIS EXAMPLE SAVES MULTI-DIMENTIONAL ARRAY TO FILE AND READS IT
- 
+  
 """
 
 import os.path
@@ -46,26 +48,7 @@ class SirFile:
     
         return True
         
-
-    def addAddressTable(self,file,cellAddressIndex):
-        fileSize=file.seek(0, os.SEEK_END)
-        numberOfElements=cellAddressIndex+1 # because index starts from 0
     
-        dataLength=numberOfElements
-    
-        type=0  #address table
-        #all types are here: https://docs.python.org/3/library/struct.html
-    
-        data = pack(self.byteOrder + self.addressBlockFormat, 0) * numberOfElements
-        buffer = pack(self.byteOrder + self.typeBlockFormat + self.addressBlockFormat, type, dataLength) + data
-        buffer+= pack(self.byteOrder + self.addressBlockFormat, 0) # addrees of next possible chank of data
-    
-        #Save address table
-        file.seek(fileSize,0)
-        file.write(buffer)
-    
-        return fileSize #return address table positoin
-
     def getAddressTablePosition(self,file):
         file.seek(3,0)
         buffer = file.read(self.addressBlockSize)
@@ -77,11 +60,11 @@ class SirFile:
 
         offset=0
         file.seek(position,0)
-        buffer=file.read(self.typeBlockSize+self.addressBlockSize)
+        buffer=file.read(self.typeBlockSize+self.addressBlockSize+self.addressBlockSize)
     
-        positionOffset=position+self.typeBlockSize+self.addressBlockSize
+        positionOffset=position+self.typeBlockSize+self.addressBlockSize+self.addressBlockSize
     
-        values=unpack(self.byteOrder + self.typeBlockFormat+ self.addressBlockFormat, buffer)
+        values=unpack(self.byteOrder + self.typeBlockFormat + self.addressBlockFormat + self.addressBlockFormat, buffer)
     
         type=values[0]
         blockFormat=self.addressBlockFormat
@@ -91,7 +74,8 @@ class SirFile:
             blockFormat=chr(type)
             blockSize = calcsize(blockFormat)
     
-        cellCount=values[1]
+        startIndex=values[1]
+        cellCount=values[2]
     
         if(index>=offset and index<offset+cellCount):
             cellPosition=positionOffset+blockSize*(index-offset)
@@ -104,6 +88,8 @@ class SirFile:
             else:
                 return [cellPosition,buffer,type] #address cell position,position,type
     
+        
+
         return [0,0,0] # not found
     
     def readCellLength(self,file,position):
@@ -113,15 +99,16 @@ class SirFile:
     
         offset=0
         file.seek(position,0)
-        buffer=file.read(self.typeBlockSize+self.addressBlockSize)
-        positionOffset=position+self.typeBlockSize+self.addressBlockSize
-        values=unpack(self.byteOrder + self.typeBlockFormat+ self.addressBlockFormat, buffer)
+        buffer=file.read(self.typeBlockSize+self.addressBlockSize+self.addressBlockSize)
+        positionOffset=position+self.typeBlockSize+self.addressBlockSize+self.addressBlockSize
+        values=unpack(self.byteOrder + self.typeBlockFormat + self.addressBlockFormat + self.addressBlockFormat, buffer)
     
         type=values[0]
         blockFormat=chr(type)
+        startIndex=values[1]
         blockSize = calcsize(blockFormat)
     
-        cellCount=values[1]
+        cellCount=values[2]
         
         return cellCount
     
@@ -173,15 +160,16 @@ class SirFile:
 
         offset=0
         file.seek(position,0)
-        buffer=file.read(self.typeBlockSize+self.addressBlockSize)
-        positionOffset=position+self.typeBlockSize+self.addressBlockSize
-        values=unpack(self.byteOrder + self.typeBlockFormat+ self.addressBlockFormat, buffer)
+        buffer=file.read(self.typeBlockSize+self.addressBlockSize+self.addressBlockSize)
+        positionOffset=position+self.typeBlockSize+self.addressBlockSize+self.addressBlockSize
+        values=unpack(self.byteOrder + self.typeBlockFormat + self.addressBlockFormat + self.addressBlockFormat, buffer)
     
         type=values[0]
         blockFormat=chr(type)
+        startIndex=values[1]
         blockSize = calcsize(blockFormat)
     
-        cellCount=values[1]
+        cellCount=values[2]
         
         if type==0:
             return []
@@ -194,7 +182,7 @@ class SirFile:
         
         return self.bytes2value(buffer,type)
     
-    def appendDataValue(self,file,cellPosition,type,data):
+    def appendDataValue(self,file,cellPosition,type, data, startIndex, numberOfElements=1, allElementsAreTheSame=False):
         fileSize=file.seek(0, os.SEEK_END)
     
         blockFormat=self.addressBlockFormat
@@ -203,10 +191,20 @@ class SirFile:
             #This is data table not address table
             blockFormat=chr(type)
             blockSize = calcsize(blockFormat)
+       
+        if allElementsAreTheSame:
+            dataLength = - numberOfElements #creating virtual array, one element and the count how many of them are there - virtually
+        else:
+            dataLength = numberOfElements #adding space for, not repeating data
 
-        dataLength=len(data)
     
-        buffer = pack(self.byteOrder + self.typeBlockFormat + self.addressBlockFormat, type, dataLength) + data
+        buffer = pack(self.byteOrder + self.typeBlockFormat + self.addressBlockFormat + self.addressBlockFormat, type, startIndex, dataLength)
+        
+        if allElementsAreTheSame:
+            buffer += data
+        else:
+            buffer += data * numberOfElements
+
         buffer+= pack(self.byteOrder + self.addressBlockFormat, 0) # addrees of next possible chank of data
     
         #Save data
@@ -215,7 +213,7 @@ class SirFile:
     
         #Save address
         buffer= pack(self.byteOrder + self.addressBlockFormat, fileSize) # addrees of next possible chank of data
-        file.seek(cellPosition[0],0)    
+        file.seek(cellPosition[0],0)
         file.write(buffer)
     
         return fileSize #return address table positoin
@@ -226,17 +224,16 @@ class SirFile:
     
         for i in range(0,len(cellAddress)):
             if(cellPosition[1]==0):
-                cellPosition[1]=self.addAddressTable(file,cellAddress[i])
-                buffer= pack(self.byteOrder + self.addressBlockFormat, cellPosition[1]) # addrees of next possible chank of data
-                file.seek(cellPosition[0],0)    
-                file.write(buffer)
+                buffer = pack(self.byteOrder + self.addressBlockFormat, 0) #* cellAddress[i] # to add address space for all elements, temporary solution
+                #cellPosition[1]=self.appendDataValue(file,cellPosition,0, buffer, startIndex=cellAddress[i], numberOfElements=1, allElementsAreTheSame=False)
+                cellPosition[1]=self.appendDataValue(file,cellPosition,0, buffer, startIndex=0, numberOfElements=cellAddress[i]+1, allElementsAreTheSame=False)
 
             cellPosition=self.getCellPositionOrValue(file,cellPosition[1],cellAddress[i])
 
         if cellPosition[1]==0:
-            self.appendDataValue(file,cellPosition,type,dataValue)
+            self.appendDataValue(file,cellPosition,type,dataValue, startIndex=cellAddress[i], numberOfElements=len(dataValue), allElementsAreTheSame=False)
         else:
-            print("Cell position is not null")
+            raise Exception("Cell position is not null. Cannot overwrite data, only append.")
 
         return True
 
@@ -252,6 +249,7 @@ class SirFile:
                 return self.bytes2value(cellPosition[1],cellPosition[2])
             else:
                 if cellPosition[1]==0:
+                    raise IndexError("Index out of range")
                     return [False,0]
                 
             position=cellPosition[1]
@@ -264,142 +262,12 @@ class SirFile:
         if path.exists(filename):
             self.file=open(filename,"rb+")
         else:
-            print ("File not found")
+            raise IOError("File not found")
             return False
             
     def closeFile(self):
         if self.file!=False:
             self.file.close()
         else:
-            print ("File not found")
+            raise IOError("File not found")
             return False
-        
-class SirData(SirFile):
-
-    def __init__(self):
-        SirFile.__init__(self)
-        
-    def convertValue2Bytes(self,value):
-
-        if isinstance(value, (str)) :
-            return 's'
-        
-        if isinstance(value, (int)):
-            return 'i'
-        
-        if isinstance(value, (float)) :
-            return 'f'
-        
-        if isinstance(value, (list)) :
-            return ''
-
-        return ''
-
-    def saveArrayRecursively(self,file,cellAddress,arrayOfValues):
-
-        data=b''    
-        for i in range(len(arrayOfValues)-1,-1,-1):
-            datatype=self.convertValue2Bytes(arrayOfValues[i])
-        
-            if(datatype==''):
-                self.saveArrayRecursively(file,cellAddress+[i],arrayOfValues[i])
-            else:
-                if(datatype=='s'):
-                    data=bytes(arrayOfValues[i], "utf8")
-                else:
-                    data=pack(self.byteOrder + datatype,arrayOfValues[i])
-            
-                pos=cellAddress+[i]
-
-                self.saveData(file,cellAddress+[i],ord(datatype),data)
-        
-    def saveArray2File(self,filename,arrayOfData):
-        if path.exists(filename)==False:
-            self.createEmptyFile(filename)
-            
-            file=open(filename,"rb+")
-            self.saveArrayRecursively(file,[],arrayOfData)
-            file.close()
-        else:
-            return False
-            
-    def loadArrayRecursively(self,file,cellAddress):
-        value=self.readData(file,cellAddress)
-        
-        if isinstance(value, (list)):
-            count=self.getCellLength(file,cellAddress)
-            innerArray=[]
-            for i in range(0,count):
-                newCellAddress=cellAddress+[i];
-                innerArray.append(self.loadArrayRecursively(file,newCellAddress))
-            
-            return innerArray
-        else:
-            return value
-    
-    def loadFile2Array(self,filename,cellAddress=[]): #cellAddress not implemented yet
-        if path.exists(filename):
-            file=open(filename,"rb+")
-            
-            count=self.getCellLength(file,cellAddress)
-            
-            newArray=[]
-            
-            for i in range(0,count):
-                newArray.append(self.loadArrayRecursively(file,cellAddress+[i]))
-            
-            file.close()
-            
-            return newArray
-        else:
-            print ("File not found")
-            return False
-
-    def getCell(self,cellAddress=[]):
-        if self.file!=False:
-            newArray=[]
-            
-            if len(cellAddress)==0:
-                count=self.getCellLength(self.file,cellAddress)
-                for i in range(0,count):
-                    newArray.append(self.loadArrayRecursively(self.file,cellAddress+[i]))
-            else:
-                newArray.append(self.loadArrayRecursively(self.file,cellAddress))
-
-            if(len(newArray)==1):
-                return newArray[0]
-            else:
-                return newArray
-        else:
-            print ("File not opened")
-            return False    
-            
-
-a=[1,['Hello','World','Dog',3,3,3,3,3,3,3,["SOME VERY DEEP WORD"]],99]
-
-
-print("Array before saving:")
-print(a)
-print()
-
-newSirFile=SirData()
-newSirFile.saveArray2File("1.sir",a)
-print("File saved.")
-print()
-
-b=newSirFile.loadFile2Array("1.sir")
-print("Load file to array:")
-print(b)
-print()
-
-
-print("Also you can access individual cells [1]:")
-c=newSirFile.loadFile2Array("1.sir",[1])
-print(c)
-print()
-
-print("Or individual cell value [1,10,0] (Its equivalent to [1][10][0]):")
-newSirFile.openFile("1.sir")
-d=newSirFile.getCell([1,10,0])
-print(d)
-newSirFile.closeFile()
